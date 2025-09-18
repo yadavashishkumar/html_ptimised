@@ -728,4 +728,271 @@ window.handleIncomingStatuses = handleStatusUpdate;
 
 /* ================= RACE CONTROLS ================= */
 const resetRaceState = (fullReset = true) => {
-  state.statuses = Array(CONFIG.N).fill(0
+  state.statuses = Array(CONFIG.N).fill(0);
+  state.lastStatuses = Array(CONFIG.N).fill(0);
+  state.reached = Array(CONFIG.N).fill(false);
+  state.elapsedTimes = Array(CONFIG.N).fill(null);
+  state.segmentTimes = Array(CONFIG.N).fill(null);
+  state.startTime = null;
+  state.lastCheckpointTime = null;
+  state.raceState = "idle";
+  
+  document.getElementById("sessionTime").innerText = "--:--:--";
+  document.getElementById("statusMessage").innerText = "Status: Waiting for driver...";
+  
+  if (fullReset) {
+    state.driverName = "--";
+    document.getElementById("driverName").innerText = state.driverName;
+  }
+  
+  audioManager.clearPlayedFlags();
+  drawCircles();
+  updateCheckpointTable();
+  renderLeaderboard();
+};
+
+// Event handlers
+document.getElementById("startRaceBtn").onclick = () => {
+  if (!state.driverName || state.driverName === "--") {
+    alert("Please set driver name first.");
+    return;
+  }
+  
+  resetRaceState(false);
+  state.raceState = "waiting_for_start_presence";
+  document.getElementById("statusMessage").innerText = "Place car at STARTING POINT and wait...";
+  
+  if (state.statuses[CONFIG.startIndex] === 1) {
+    state.raceState = "ready_to_go";
+    document.getElementById("statusMessage").innerText = "Now you are ready to go — waiting for car to leave starting point...";
+  }
+};
+
+document.getElementById("setDriverBtn").onclick = () => {
+  const input = document.getElementById("driverInput").value.trim();
+  if (!input) {
+    alert("Enter a driver name");
+    return;
+  }
+  
+  const canonical = normalizeDriverName(input);
+  state.driverName = canonical;
+  document.getElementById("driverName").innerText = state.driverName;
+  
+  // Update leaderboard
+  state.leaderboard = state.leaderboard.filter(r => r.name !== state.driverName);
+  const newRow = { name: state.driverName, prev: "-", totalTime: null };
+  state.leaderboard.unshift(newRow);
+  
+  if (state.leaderboard.length > 30) {
+    state.leaderboard = state.leaderboard.slice(0, 30);
+  }
+  
+  renderLeaderboard();
+  document.getElementById("statusMessage").innerText = "Driver set. Place car at STARTING POINT and press Start Race.";
+};
+
+document.getElementById("resetBtn").onclick = () => resetRaceState(true);
+
+/* ================= MAIN LOOP (OPTIMIZED) ================= */
+let mainLoopTimer = null;
+let lastUpdateTime = 0;
+
+const mainLoopTick = () => {
+  const now = Date.now();
+  
+  // Update clock
+  document.getElementById("liveClock").innerText = new Date().toLocaleTimeString();
+
+  // Update elapsed timer
+  if (state.raceState === "running" && state.startTime) {
+    const nowSec = Math.floor((now - state.startTime) / 1000);
+    document.getElementById("elapsedTimer").innerText = formatElapsed(nowSec);
+  } else if (state.raceState === "finished" && state.elapsedTimes[CONFIG.endIndex] != null) {
+    document.getElementById("elapsedTimer").innerText = formatElapsed(state.elapsedTimes[CONFIG.endIndex]);
+  } else {
+    document.getElementById("elapsedTimer").innerText = "00:00";
+  }
+
+  // Only redraw if enough time has passed or status changed
+  if (now - lastUpdateTime >= CONFIG.mainLoopMs) {
+    try {
+      handleStatusUpdate({ statuses: state.statuses.slice() });
+    } catch (e) {
+      console.warn('Main loop status update error:', e);
+    }
+    lastUpdateTime = now;
+  }
+};
+
+const startMainLoop = () => {
+  if (mainLoopTimer) clearInterval(mainLoopTimer);
+  mainLoopTimer = setInterval(mainLoopTick, 50); // High frequency for smooth timer updates
+};
+
+/* ================= LOCAL STORAGE (OPTIMIZED) ================= */
+const STORAGE_KEY = 'race_results_store_v1';
+
+const loadStore = () => {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+  } catch (e) {
+    return {};
+  }
+};
+
+const saveStore = (store) => {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  } catch (e) {
+    console.error('Failed to save to localStorage:', e);
+  }
+};
+
+window.appendRecordToStore = (dateKey, record) => {
+  const store = loadStore();
+  if (!store[dateKey]) store[dateKey] = [];
+  store[dateKey].push(record);
+  saveStore(store);
+  return store;
+};
+
+/* ================= EXCEL EXPORT (STREAMLINED) ================= */
+const initExcelExport = () => {
+  const exportBtn = document.getElementById('exportBtn');
+  const openFileBtn = document.getElementById('openFileBtn');
+  
+  exportBtn.onclick = () => {
+    const store = loadStore();
+    if (!Object.keys(store).length) {
+      alert('No race results stored locally.');
+      return;
+    }
+    
+    // Create workbook using SheetJS
+    if (typeof XLSX === 'undefined') {
+      alert('Excel export not available - XLSX library not loaded');
+      return;
+    }
+    
+    const wb = XLSX.utils.book_new();
+    Object.keys(store).sort().forEach(dateKey => {
+      const rows = (store[dateKey] || []).map(r => ({
+        Timestamp: r.Timestamp || '',
+        Driver: r.Driver || '',
+        TotalTimeSeconds: r.TotalTimeSeconds || '',
+        TotalTimeFormatted: r.TotalTimeFormatted || ''
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const safeName = dateKey.slice(0, 31).replace(/[\\/?*[\]:]/g, '-');
+      XLSX.utils.book_append_sheet(wb, ws, safeName || 'Sheet1');
+    });
+    
+    const fileName = `race_results_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    try {
+      XLSX.writeFile(wb, fileName);
+      console.log('Exported:', fileName);
+    } catch (e) {
+      console.error('Export failed:', e);
+      alert('Export failed: ' + (e.message || e));
+    }
+  };
+  
+  openFileBtn.onclick = async () => {
+    if (!('showSaveFilePicker' in window)) {
+      alert('File picker not supported in this browser. Use the Save XLSX button instead.');
+      return;
+    }
+    
+    try {
+      const opts = {
+        suggestedName: `race_results_${new Date().toISOString().slice(0, 10)}.xlsx`,
+        types: [{
+          description: 'Excel Workbook',
+          accept: {
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx']
+          }
+        }]
+      };
+      
+      window._fileHandle = await window.showSaveFilePicker(opts);
+      alert('File opened for writing. Results will be automatically saved here.');
+    } catch (e) {
+      if (e.name !== 'AbortError') {
+        console.error('File picker error:', e);
+        alert('File picker failed: ' + e.message);
+      }
+    }
+  };
+};
+
+/* ================= ABLY REALTIME (UNCHANGED) ================= */
+const initAbly = () => {
+  const ABLY_CLIENT_KEY = 'vVbihw.8EutMw:MzEukjlIZ06pmcedx9HRhFO5cnFeuld8EY07MrCYewc';
+  
+  if (!ABLY_CLIENT_KEY || ABLY_CLIENT_KEY.startsWith('REPLACE')) {
+    console.warn('Ably client key not configured.');
+    return;
+  }
+  
+  try {
+    const ablyRealtime = new Ably.Realtime(ABLY_CLIENT_KEY);
+    const statusChannel = ablyRealtime.channels.get('race-status');
+
+    ablyRealtime.connection.on('connected', () => console.log('Ably connected'));
+    ablyRealtime.connection.on('failed', (err) => console.error('Ably connection failed', err));
+    ablyRealtime.connection.on('suspended', () => console.warn('Ably connection suspended'));
+    ablyRealtime.connection.on('disconnected', () => console.warn('Ably disconnected'));
+
+    statusChannel.subscribe('status', (msg) => {
+      try {
+        const d = msg.data;
+        if (Array.isArray(d)) {
+          window.handleIncomingStatuses(d);
+        } else if (typeof d === 'string') {
+          const arr = d.split(',').map(x => Number(x));
+          window.handleIncomingStatuses(arr);
+        } else if (d && d.statuses) {
+          window.handleIncomingStatuses(d.statuses);
+        }
+      } catch (e) {
+        console.error('Ably status parse error', e);
+      }
+    });
+
+    console.log('Subscribed to Ably race-status/status');
+  } catch (e) {
+    console.error('Ably init error', e);
+  }
+};
+
+/* ================= INITIALIZATION ================= */
+window.addEventListener('resize', () => {
+  canvasNeedsResize = true;
+  drawCircles();
+});
+
+window.addEventListener('load', () => {
+  try {
+    resizeCanvas();
+    drawCircles();
+    updateCheckpointTable();
+    renderLeaderboard();
+    initExcelExport();
+  } catch (e) {
+    console.warn('Initial setup error:', e);
+  }
+  
+  startMainLoop();
+});
+
+// Initialize Ably
+initAbly();
+
+</script>
+
+<!-- SheetJS for Excel export -->
+<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+
+</body>
+</html>

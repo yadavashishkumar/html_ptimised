@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title> Race Track Dashboard </title>
+
+  <!-- Ably realtime JS -->
+  <script src="https://cdn.ably.io/lib/ably.min-1.js"></script>
+
+  <!-- Tailwind for UI -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    body {
+      background-color: #e0f2fe83;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.25), rgba(255,255,255,0.06)),
+        url('/images/car10.jpg');
+      background-repeat: no-repeat;
+      background-position: center center;
+      background-size: cover;
+      background-attachment: fixed;
+      min-height: 100vh;
+    }
+    canvas { margin: 20px auto; display: block; width:100%; height:auto; }
+    .translucent-td { background: rgba(255,255,255,0.12); }
+    @media (max-width: 640px) { h1, h2 { font-weight: 700; } }
+
+    #__audio_unlock_box {
+      position: fixed !important;
+      right: 12px !important;
+      bottom: 12px !important;
+      z-index: 100001 !important;
+      padding: 10px 14px !important;
+      background: rgba(17,24,39,0.95) !important;
+      color: #fff !important;
+      border-radius: 8px !important;
+      cursor: pointer !important;
+      font-family: system-ui, Arial, sans-serif !important;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+    }
+
+    .top-controls { 
+      display: flex; 
+      gap: 12px; 
+      align-items: center; 
+      justify-content: center; 
+      margin-bottom: 8px; 
+      flex-wrap: wrap;
+    }
+    .audio-control {
+      background: #111827;
+      color: #fff;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background-color 0.2s;
+    }
+    .audio-control:hover { background: #374151; }
+    .audio-control.muted { background: #6b7280; }
+    
+    .volume-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(17,24,39,0.9);
+      padding: 6px 12px;
+      border-radius: 8px;
+      color: white;
+    }
+    
+    .volume-slider {
+      width: 80px;
+      height: 4px;
+      background: #374151;
+      outline: none;
+      border-radius: 2px;
+    }
+    
+    .volume-slider::-webkit-slider-thumb {
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      background: #60a5fa;
+      cursor: pointer;
+      border-radius: 50%;
+    }
+    
+    .volume-slider::-moz-range-thumb {
+      width: 16px;
+      height: 16px;
+      background: #60a5fa;
+      cursor: pointer;
+      border-radius: 50%;
+      border: none;
+    }
+  </style>
+</head>
+<body class="text-black min-h-screen flex flex-col items-center p-6">
+
+  <div class="top-controls">
+    <div class="text-gray-700 text-sm">Version: v2.0 — Optimized</div>
+    <button id="welcomeMuteBtn" class="audio-control">🔊 Mute</button>
+    <div class="volume-container">
+      <span>🔊</span>
+      <input type="range" id="welcomeVolume" class="volume-slider" min="0" max="1" step="0.1" value="0.4">
+      <span id="volumeDisplay">40%</span>
+    </div>
+  </div>
+
+  <div class="backdrop-blur-md bg-white/5 shadow-xl rounded-2xl p-6 w-full max-w-5xl mb-1 border border-white/10">
+    <h2 class="text-6xl font-bold text-gray-900 mb-0.5 drop-shadow-lg text-center">Robotics Lab Programme</h2>
+  </div>
+
+  <!-- Leaderboard -->
+  <div class="backdrop-blur-md bg-white/30 shadow-2xl rounded-2xl p-6 w-full max-w-5xl mb-6 border border-white/40">
+    <h2 class="text-5xl font-bold text-gray-900 mb-4 drop-shadow-lg text-center">🏆 Tournament Standings 🏆</h2>
+    <table class="w-full border-collapse text-centre">
+      <thead class="bg-white/20 text-gray-800">
+        <tr>
+          <th class="py-2 px-3">Pos</th>
+          <th class="py-2 px-3">Driver</th>
+          <th class="py-2 px-3">Prev</th>
+          <th class="py-2 px-3">Total Time</th>
+        </tr>
+      </thead>
+      <tbody id="leaderboard" class="text-lg text-gray-900"></tbody>
+    </table>
+  </div>
+
+  <!-- Controls + Dashboard UI -->
+  <div class="backdrop-blur-md bg-white/30 shadow-2xl rounded-2xl p-6 w-full max-w-5xl mb-6 border border-white/40">
+    <h1 class="text-3xl font-bold text-center text-gray-900 drop-shadow-lg">Race Dashboard</h1>
+    <div class="flex justify-between items-center mt-4 text-black">
+      <div>
+        <p class="text-gray-900">Driver's Name</p>
+        <h2 id="driverName" class="text-xl font-semibold">--</h2>
+      </div>
+      <div>
+        <p class="text-gray-900 text-center">Clock</p>
+        <h2 id="liveClock" class="text-xl font-semibold text-center">--:--:--</h2>
+      </div>
+      <div>
+        <p class="text-gray-900 text-center">Race Start</p>
+        <h2 id="sessionTime" class="text-xl font-semibold text-center">--:--:--</h2>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-2 mt-4">
+      <input id="driverInput" type="text" placeholder="Enter driver name"
+        class="flex-1 px-3 py-2 text-black border rounded-md focus:outline-none focus:ring-2 focus:ring-orange-400" />
+      <button id="setDriverBtn"
+        class="bg-blue-500 hover:bg-blue-600 px-4 py-2 rounded-md shadow text-white">Set Driver</button>
+      <button id="startRaceBtn"
+        class="bg-green-500 hover:bg-green-600 px-4 py-2 rounded-md shadow text-white">▶️ Start Race</button>
+      <button id="resetBtn"
+        class="bg-red-500 hover:bg-red-600 px-4 py-2 rounded-md shadow text-white">⟲ Reset</button>
+    </div>
+
+    <div class="mt-3">
+      <p id="statusMessage" class="text-indigo-600 font-semibold">Status: Waiting for driver...</p>
+    </div>
+  </div>
+
+  <div class="text-center mb-6 backdrop-blur-md bg-white/30 shadow-lg rounded-xl px-6 py-3 border border-white/40">
+    <p class="text-gray-800 font-bold">Elapsed Time</p>
+    <h2 id="elapsedTimer" class="text-xl font-semibold text-black">00:00</h2>
+  </div>
+
+  <div class="backdrop-blur-md bg-white/30 shadow-2xl rounded-2xl p-6 w-full max-w-5xl mb-6 border border-white/40">
+    <h2 class="text-3xl font-semibold text-center text-gray-800 mb-4">Track Progress</h2>
+    <canvas id="board" width="1000" height="150"></canvas>
+  </div>
+
+  <div class="backdrop-blur-md bg-white/30 shadow-2xl rounded-2xl p-6 w-full max-w-5xl border border-white/40">
+    <h2 class="text-xl font-semibold text-gray-800 text-center mb-4">Checkpoint Times</h2>
+    <table class="w-full border-collapse text-center text-black">
+      <thead class="bg-white/20 text-gray-800">
+        <tr>
+          <th class="py-2 px-4 border">Checkpoint</th>
+          <th class="py-2 px-4 border">Reached</th>
+          <th class="py-2 px-4 border">Elapsed</th>
+          <th class="py-2 px-4 border">Segment</th>
+        </tr>
+      </thead>
+      <tbody id="checkpointTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Export buttons -->
+  <div style="position: fixed; left: 12px; bottom: 12px; z-index: 99999; display: flex; gap: 8px;">
+    <button id="exportBtn" class="px-3 py-2 rounded bg-blue-600 text-white shadow text-sm">Save XLSX</button>
+    <button id="openFileBtn" class="px-3 py-2 rounded bg-gray-700 text-white shadow text-sm">Open File</button>
+  </div>
+
+  <!-- Audio unlock overlay -->
+  <div id="__audio_unlock_box" style="display:none">Enable Audio</div>
+
+<script>
+/* ================= CORE DASHBOARD LOGIC ================= */
+const CONFIG = {
+  N: 6,
+  startIndex: 0,
+  endIndex: 5,
+  mainLoopMs: 200,
+  debounceMs: 700,
+  welcomeVolume: 0.4,
+  welcomeCount: 21
+};
+
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+
+// Race state
+let state = {
+  statuses: Array(CONFIG.N).fill(0),
+  lastStatuses: Array(CONFIG.N).fill(0),
+  reached: Array(CONFIG.N).fill(false),
+  elapsedTimes: Array(CONFIG.N).fill(null),
+  segmentTimes: Array(CONFIG.N).fill(null),
+  startTime: null,
+  lastCheckpointTime: null,
+  driverName: "--",
+  raceState: "idle",
+  leaderboard: []
+};
+
+// Optimized canvas handling
+let canvasNeedsResize = true;
+const resizeCanvas = () => {
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  const rect = canvas.getBoundingClientRect();
+  const cssWidth = rect.width || 1000;
+  const cssHeight = rect.height || 150;
+  const displayWidth = Math.max(1, Math.round(cssWidth * dpr));
+  const displayHeight = Math.max(1, Math.round(cssHeight * dpr));
+
+  if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+    ctx.setTransform(1,0,0,1,0,0);
+    canvas.width = displayWidth;
+    canvas.height = displayHeight;
+    ctx.scale(dpr, dpr);
+    canvasNeedsResize = false;
+  }
+};
+
+// Utility functions
+const formatElapsed = (sec) => {
+  if (sec == null) return "--:--";
+  const m = Math.floor(sec / 60).toString().padStart(2, '0');
+  const s = Math.floor(sec % 60).toString().padStart(2, '0');
+  return `${m}:${s}`;
+};
+
+const formatTimeForBoard = (sec) => {
+  if (sec == null) return "-";
+  const m = Math.floor(sec / 60).toString().padStart(2, '0');
+  const s = (sec % 60).toFixed(2).padStart(5, '0');
+  return `${m}:${s}`;
+};
+
+const normalizeDriverName = (raw) => {
+  if (!raw && raw !== 0) return '';
+  const s = String(raw).trim().replace(/\s+/g, ' ');
+  return s.toLowerCase().split(' ').map(w => w ? w[0].toUpperCase() + w.slice(1) : '').join(' ');
+};
+
+// Optimized drawing function
+const drawCircles = () => {
+  if (canvasNeedsResize) resizeCanvas();
+  
+  const rect = canvas.getBoundingClientRect();
+  const cssW = rect.width || 1000;
+  const cssH = rect.height || 150;
+  
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const gap = cssW / (CONFIG.N + 1);
+  const cy = cssH / 2;
+  const radius = 28;
+
+  for (let i = 0; i < CONFIG.N; i++) {
+    const cx = (i + 1) * gap;
+    
+    // Determine color
+    let color;
+    if (state.reached[i]) {
+      color = "#22c55e"; // green
+    } else if (state.statuses[i] === 1) {
+      color = "#60a5fa"; // blue
+    } else {
+      color = "#ef4444"; // red
+    }
+
+    // Draw circle
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#111";
+    ctx.stroke();
+
+    // Label
+    ctx.fillStyle = "#000";
+    ctx.font = "bold 16px Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const label = (i === CONFIG.startIndex) ? "START" : (i === CONFIG.endIndex ? "END" : String(i));
+    ctx.fillText(label, cx, cy);
+
+    // Time display
+    ctx.font = "12px Arial";
+    const display = state.elapsedTimes[i] != null ? formatElapsed(state.elapsedTimes[i]) : "--:--";
+    ctx.fillText(display, cx, cy + 48);
+  }
+};
+
+// Leaderboard rendering
+const renderLeaderboard = () => {
+  const tbody = document.getElementById('leaderboard');
+  tbody.innerHTML = "";
+  
+  state.leaderboard.sort((a, b) => {
+    if (a.totalTime == null && b.totalTime == null) return (a.prev || 0) - (b.prev || 0);
+    if (a.totalTime == null) return 1;
+    if (b.totalTime == null) return -1;
+    return a.totalTime - b.totalTime;
+  });
+
+  state.leaderboard.forEach((row, idx) => {
+    const tr = document.createElement('tr');
+    tr.className = idx % 2 === 0 ? "bg-gray-300" : "bg-gray-100";
+    const cls = (row.name === state.driverName) ? "text-orange-400 font-bold" : "";
+    tr.innerHTML = `
+      <td class="py-2 px-3 ${cls}">${idx + 1}</td>
+      <td class="py-2 px-3 ${cls}">${row.name}</td>
+      <td class="py-2 px-3">${row.prev != null ? row.prev : "-"}</td>
+      <td class="py-2 px-3">${row.totalTime != null ? formatTimeForBoard(row.totalTime) : "-"}</td>
+    `;
+    tbody.appendChild(tr);
+    row.position = idx + 1;
+  });
+};
+
+// Checkpoint table update
+const updateCheckpointTable = () => {
+  const table = document.getElementById("checkpointTable");
+  table.innerHTML = "";
+  
+  for (let i = 0; i < CONFIG.N; i++) {
+    const tr = document.createElement('tr');
+    tr.className = i % 2 === 0 ? "bg-white/40" : "bg-white/20";
+    const name = (i === CONFIG.startIndex) ? "STARTING POINT" : (i === CONFIG.endIndex ? "END POINT" : String(i));
+    tr.innerHTML = `
+      <td class="py-2 px-4">${name}</td>
+      <td class="py-2 px-4">${state.reached[i] ? "✅" : "❌"}</td>
+      <td class="py-2 px-4">${state.elapsedTimes[i] != null ? formatElapsed(state.elapsedTimes[i]) : "--:--"}</td>
+      <td class="py-2 px-4">${state.segmentTimes[i] != null ? formatElapsed(state.segmentTimes[i]) : "--:--"}</td>
+    `;
+    table.appendChild(tr);
+  }
+};
+
+/* ================= AUDIO SYSTEM (OPTIMIZED) ================= */
+class AudioManager {
+  constructor() {
+    this.sounds = {};
+    this.playedFlags = {};
+    this.lastPlayTs = {};
+    this.welcomeAudio = null;
+    this.welcomeRunning = false;
+    this.lastWelcome = null;
+    this.volume = parseFloat(localStorage.getItem('welcomeVolume') || CONFIG.welcomeVolume);
+    this.muted = localStorage.getItem('welcomeMuted') === 'true';
+    
+    this.initSounds();
+    this.initWelcome();
+    this.bindControls();
+  }
+
+  initSounds() {
+    const soundFiles = {
+      nowYouCanStart: 'now_you_can_start.wav',
+      letsSeeAction: 'lets_see_some_action.wav',
+      ch1: 'CH1.wav',
+      ch2: 'CH2.wav',
+      ch3: 'CH3.wav',
+      ch4: 'CH4.wav',
+      finish: 'finish.wav'
+    };
+
+    const soundPath = `${location.origin}/sounds/`;
+    
+    Object.entries(soundFiles).forEach(([key, file]) => {
+      try {
+        const audio = new Audio(soundPath + file);
+        audio.preload = 'auto';
+        audio.crossOrigin = 'anonymous';
+        audio.volume = 0.8;
+        this.sounds[key] = audio;
+        this.playedFlags[key] = false;
+        this.lastPlayTs[key] = 0;
+      } catch (e) {
+        console.warn(`Failed to load sound: ${key}`, e);
+      }
+    });
+  }
+
+  initWelcome() {
+    this.updateControls();
+    if (!this.muted) {
+      this.startWelcome();
+    }
+  }
+
+  bindControls() {
+    const muteBtn = document.getElementById('welcomeMuteBtn');
+    const volumeSlider = document.getElementById('welcomeVolume');
+    const volumeDisplay = document.getElementById('volumeDisplay');
+
+    volumeSlider.value = this.volume;
+    volumeDisplay.textContent = Math.round(this.volume * 100) + '%';
+
+    muteBtn.addEventListener('click', () => {
+      this.toggleMute();
+    });
+
+    volumeSlider.addEventListener('input', (e) => {
+      this.setVolume(parseFloat(e.target.value));
+      volumeDisplay.textContent = Math.round(e.target.value * 100) + '%';
+    });
+  }
+
+  toggleMute() {
+    this.muted = !this.muted;
+    localStorage.setItem('welcomeMuted', this.muted.toString());
+    this.updateControls();
+    
+    if (this.muted) {
+      this.stopWelcome();
+    } else {
+      this.startWelcome();
+    }
+  }
+
+  setVolume(volume) {
+    this.volume = Math.max(0, Math.min(1, volume));
+    localStorage.setItem('welcomeVolume', this.volume.toString());
+    
+    if (this.welcomeAudio) {
+      this.welcomeAudio.volume = this.volume;
+    }
+    
+    if (this.volume === 0 && !this.muted) {
+      this.muted = true;
+      this.updateControls();
+      this.stopWelcome();
+    } else if (this.volume > 0 && this.muted) {
+      this.muted = false;
+      this.updateControls();
+      this.startWelcome();
+    }
+  }
+
+  updateControls() {
+    const muteBtn = document.getElementById('welcomeMuteBtn');
+    const volumeSlider = document.getElementById('welcomeVolume');
+    
+    if (this.muted || this.volume === 0) {
+      muteBtn.innerHTML = '🔇 Unmute';
+      muteBtn.classList.add('muted');
+      if (volumeSlider.value !== '0') {
+        volumeSlider.value = '0';
+        document.getElementById('volumeDisplay').textContent = '0%';
+      }
+    } else {
+      muteBtn.innerHTML = '🔊 Mute';
+      muteBtn.classList.remove('muted');
+      if (volumeSlider.value !== this.volume.toString()) {
+        volumeSlider.value = this.volume;
+        document.getElementById('volumeDisplay').textContent = Math.round(this.volume * 100) + '%';
+      }
+    }
+  }
+
+  async startWelcome() {
+    if (this.muted || this.volume === 0) return;
+    
+    this.welcomeRunning = true;
+    await this.playNextWelcome(true);
+  }
+
+  stopWelcome() {
+    this.welcomeRunning = false;
+    if (this.welcomeAudio) {
+      this.welcomeAudio.pause();
+      this.welcomeAudio.currentTime = 0;
+    }
+  }
+
+  async playNextWelcome(isFirst = false) {
+    if (!this.welcomeRunning || this.muted || this.volume === 0) return;
+    
+    const welcomeFile = this.pickWelcomeFile();
+    if (!welcomeFile) return;
+
+    try {
+      if (this.welcomeAudio) {
+        this.welcomeAudio.pause();
+        this.welcomeAudio.src = '';
+      }
+
+      this.welcomeAudio = new Audio(`${location.origin}/sounds/${welcomeFile}`);
+      this.welcomeAudio.preload = 'auto';
+      this.welcomeAudio.crossOrigin = 'anonymous';
+      this.welcomeAudio.volume = this.volume;
+      
+      this.welcomeAudio.addEventListener('ended', () => {
+        setTimeout(() => this.playNextWelcome(false), 300);
+      });
+
+      const playPromise = this.welcomeAudio.play();
+      if (playPromise) {
+        playPromise.catch(err => {
+          if (isFirst) {
+            this.showAudioUnlock();
+          }
+        });
+      }
+    } catch (e) {
+      setTimeout(() => this.playNextWelcome(false), 1000);
+    }
+  }
+
+  pickWelcomeFile() {
+    if (CONFIG.welcomeCount <= 0) return null;
+    
+    let pick;
+    do {
+      pick = `welcome_${String(Math.floor(Math.random() * CONFIG.welcomeCount) + 1).padStart(2, '0')}.mp3`;
+    } while (CONFIG.welcomeCount > 1 && pick === this.lastWelcome);
+    
+    this.lastWelcome = pick;
+    return pick;
+  }
+
+  showAudioUnlock() {
+    const unlockBox = document.getElementById('__audio_unlock_box');
+    if (unlockBox) {
+      unlockBox.style.display = 'block';
+      unlockBox.onclick = () => {
+        this.startWelcome();
+        unlockBox.style.display = 'none';
+      };
+    }
+  }
+
+  isDriverSet() {
+    return state.driverName && state.driverName !== "--";
+  }
+
+  playSound(key) {
+    if (!this.isDriverSet() && key !== 'welcome') {
+      console.log(`Audio blocked: ${key} (driver not set)`);
+      return;
+    }
+
+    if (this.playedFlags[key]) {
+      console.log(`Audio blocked: ${key} (already played)`);
+      return;
+    }
+
+    const now = Date.now();
+    if (now - (this.lastPlayTs[key] || 0) < CONFIG.debounceMs) {
+      console.log(`Audio blocked: ${key} (debounce)`);
+      return;
+    }
+
+    const sound = this.sounds[key];
+    if (!sound) {
+      console.warn(`No sound found for: ${key}`);
+      return;
+    }
+
+    try {
+      const clone = sound.cloneNode(true);
+      clone.currentTime = 0;
+      const playPromise = clone.play();
+      if (playPromise) {
+        playPromise.catch(() => {/* ignore */});
+      }
+      
+      this.playedFlags[key] = true;
+      this.lastPlayTs[key] = now;
+      
+      clone.addEventListener('ended', () => {
+        try { clone.src = ''; } catch(e) {}
+      });
+    } catch (e) {
+      console.warn(`Play error for ${key}:`, e);
+    }
+  }
+
+  clearPlayedFlags() {
+    Object.keys(this.playedFlags).forEach(key => {
+      this.playedFlags[key] = false;
+      this.lastPlayTs[key] = 0;
+    });
+  }
+}
+
+// Initialize audio manager
+const audioManager = new AudioManager();
+
+// Expose global audio functions
+window.playNowYouCanStart = () => audioManager.playSound('nowYouCanStart');
+window.playLetsSeeAction = () => audioManager.playSound('letsSeeAction');
+window.playFinish = () => audioManager.playSound('finish');
+window.playCheckpoint = (idx) => {
+  if (state.raceState === 'running') {
+    audioManager.playSound(`ch${idx}`);
+  }
+};
+
+/* ================= STATUS UPDATE HANDLER ================= */
+const handleStatusUpdate = (msg) => {
+  try {
+    const src = Array.isArray(msg) ? { statuses: msg } : msg;
+    state.lastStatuses = state.statuses.slice();
+    state.statuses = (src.statuses || []).map(x => Number(x));
+
+    // State machine for race progression
+    switch (state.raceState) {
+      case "waiting_for_start_presence":
+        if (state.statuses[CONFIG.startIndex] === 1) {
+          state.raceState = "ready_to_go";
+          document.getElementById("statusMessage").innerText = "Now you are ready to go — waiting for car to leave starting point...";
+          window.playNowYouCanStart();
+        } else {
+          document.getElementById("statusMessage").innerText = "Please place car at STARTING POINT and press Start Race";
+        }
+        break;
+
+      case "ready_to_go":
+      case "waiting_for_start_presence":
+        if (state.lastStatuses[CONFIG.startIndex] === 1 && 
+            state.statuses[CONFIG.startIndex] === 0 && 
+            state.driverName !== "--") {
+          
+          state.startTime = Date.now();
+          state.lastCheckpointTime = null;
+          state.raceState = "running";
+          document.getElementById("sessionTime").innerText = new Date(state.startTime).toLocaleTimeString();
+          document.getElementById("statusMessage").innerText = "Race started!";
+          state.reached[CONFIG.startIndex] = true;
+          window.playLetsSeeAction();
+        }
+        break;
+
+      case "running":
+        const nowSec = (Date.now() - state.startTime) / 1000;
+        
+        for (let i = 1; i <= CONFIG.endIndex; i++) {
+          if (state.statuses[i] === 1 && !state.reached[i]) {
+            state.reached[i] = true;
+            state.elapsedTimes[i] = nowSec;
+            
+            if (state.lastCheckpointTime == null) {
+              state.segmentTimes[i] = state.elapsedTimes[i];
+            } else {
+              state.segmentTimes[i] = state.elapsedTimes[i] - state.lastCheckpointTime;
+            }
+            
+            state.lastCheckpointTime = state.elapsedTimes[i];
+
+            if (i === CONFIG.endIndex) {
+              // Race finished
+              state.raceState = "finished";
+              const totalTime = state.elapsedTimes[i];
+              document.getElementById("statusMessage").innerText = `Finished! Total time: ${formatTimeForBoard(totalTime)}`;
+
+              if (state.driverName && state.driverName !== "--") {
+                // Update leaderboard
+                state.leaderboard = state.leaderboard.filter(r => r.name !== state.driverName);
+                const newEntry = { name: state.driverName, prev: "-", totalTime: totalTime };
+                state.leaderboard.push(newEntry);
+
+                // Save result
+                try {
+                  const record = {
+                    Timestamp: new Date().toISOString(),
+                    Driver: state.driverName,
+                    TotalTimeSeconds: totalTime,
+                    TotalTimeFormatted: formatTimeForBoard(totalTime)
+                  };
+                  appendRecordToStore(new Date().toISOString().slice(0, 10), record);
+                } catch (e) {
+                  console.error('Save error', e);
+                }
+
+                window.playFinish();
+              }
+            } else {
+              // Checkpoint reached
+              window.playCheckpoint(i);
+            }
+          }
+        }
+        break;
+    }
+
+    // Update UI
+    drawCircles();
+    updateCheckpointTable();
+    renderLeaderboard();
+
+  } catch (err) {
+    console.warn('Status update error:', err);
+  }
+};
+
+// Expose for external use
+window.handleIncomingStatuses = handleStatusUpdate;
+
+/* ================= RACE CONTROLS ================= */
+const resetRaceState = (fullReset = true) => {
+  state.statuses = Array(CONFIG.N).fill(0
